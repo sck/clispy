@@ -10,11 +10,12 @@ autom4te.cache
 config.status
 *.bin
 ?
+??
 config.log
 lmc_config.h
 Makefile
-*.so
-*.bundle
 *.log
-pkg
+a.c
 
+clispy
+clispy.dSYM

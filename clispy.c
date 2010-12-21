@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2010, Sven C. Koehler
+ * 
+ * The code for parsing and interpreting scheme code is based on Peter
+ * Norvig's clis.py: <http://norvig.com/lispy.html>
+ */
+
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -29,8 +36,8 @@ typedef union {
 #define CL_INT(va) va.t.d.i
 #define CL_FLOAT(va) va.t.d.f
 
-static Id clNil = {0};
-static Id clTrue = {1};
+static Id clNil = {0}; 
+static Id clTrue = {0};
 
 Id __d(const char *where, int l, const char *comment, Id va);
 Id __ds(const char *comment, Id va);
@@ -103,6 +110,7 @@ void *cl_shm_create() {
 #error sizeof(size_t) must be 8 bytes!!
 #endif
 
+#define CL_TYPE_BOOL 0
 #define CL_TYPE_FLOAT 1
 #define CL_TYPE_INT 2
 
@@ -184,7 +192,7 @@ int cl_zero(Id va) {
 
 int cl_free(Id va) {
   int t = CL_TYPE(va);
-  if (t == CL_TYPE_FLOAT || t == CL_TYPE_INT) return 0;
+  if (t == CL_TYPE_BOOL || t == CL_TYPE_FLOAT || t == CL_TYPE_INT) return 0;
   char *used_chunk_p = VA_TO_PTR(va); P_0_R(used_chunk_p, 0);
   cl_mem_chunk_descriptor_t *mcd_used_chunk = 
       (cl_mem_chunk_descriptor_t *)used_chunk_p;
@@ -203,6 +211,8 @@ Id cl_int(int i) {
 
 Id cl_float(float f) { 
     Id va; CL_TYPE(va) = CL_TYPE_FLOAT; CL_FLOAT(va) = f; return va; }
+
+Id cn(Id v) { return CL_TYPE(v) == CL_TYPE_BOOL ? cl_int(v.s ? 1 : 0) : v; }
 
 /*
  * Basic types 
@@ -289,7 +299,7 @@ Id cl_retain(Id va) { RCI; (*rc)++; return va; }
 
 int cl_strdup(Id va_dest, char *source, cl_string_size_t l) {
   char *p; CL_TYPED_VA_TO_PTR(p, va_dest, CL_TYPE_STRING, 0);
-  CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "String too large", 0);
+  CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "strdup: string too large", 0);
   *(cl_string_size_t *) p = l;
   p += sizeof(cl_string_size_t);
   memcpy(p, source, l);
@@ -334,7 +344,7 @@ char *cl_string_ptr(Id va_s) { CL_ACQUIRE_STR_D(ds, va_s, 0x0); return ds.s; }
 Id cl_string_append(Id va_d, Id va_s) {
   CL_ACQUIRE_STR_D(dd, va_d, clNil); CL_ACQUIRE_STR_D(ds, va_s, clNil);
   size_t l = dd.l + ds.l;
-  CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "append: String too large", clNil);
+  CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "append: string too large", clNil);
   memcpy(dd.s + dd.l, ds.s, ds.l);
   *(cl_string_size_t *) (dd.s - sizeof(cl_string_size_t)) = l;
   dd.s += l;
@@ -402,6 +412,9 @@ size_t cl_hash_var(Id va) {
   return va.s;
 }
 
+Id cnil2(Id i) { 
+    return CL_TYPE(i) == CL_TYPE_ARRAY && cl_ary_len(i) == 0 ? clNil : i; }
+
 int cl_equals_i(Id a, Id b) {
   if (cl_is_string(a) && cl_is_string(b)) {
      CL_ACQUIRE_STR_D(da, a, 0); CL_ACQUIRE_STR_D(db, b, 0); 
@@ -411,7 +424,7 @@ int cl_equals_i(Id a, Id b) {
         if (da.s[i] != db.s[i]) return 0; }
      return 1;
   } 
-  return a.s == b.s;
+  return cnil2(a).s == cnil2(b).s;
 }
 
 
@@ -544,7 +557,10 @@ Id cl_env_new(Id va_ht_parent) {
     va_ht = ht->va_parent; \
   }
 
-Id cl_env_find(Id va_ht, Id va_key) { CL_ENV_FIND; return found; }
+Id cl_env_find(Id va_ht, Id va_key) { 
+  CL_ENV_FIND; 
+  return found; 
+}
 
 Id cl_env_find_and_set(Id va_ht, Id va_key, Id va_value) { 
   CL_ENV_FIND;
@@ -558,6 +574,7 @@ Id cl_debug();
 void cl_add_globals(Id env);
 
 void cl_init() {
+  clTrue.t.d.i = 1;
   cl_base = cl_shm_create();
   cl_init_memory(cl_base);
   cl_symbols = cl_ht_new();
@@ -572,9 +589,7 @@ void cl_init() {
  * FFI
  */
 
-typedef struct {
-  Id (*func_ptr)(Id);
-} cl_cfunc_t;
+typedef struct { Id (*func_ptr)(Id); } cl_cfunc_t;
 
 Id cl_define_func(char *name, Id (*p)(Id), Id env) { 
   Id va_f; CL_ALLOC(va_f, CL_TYPE_CFUNC);
@@ -588,8 +603,6 @@ Id cl_call(Id va_f, Id x) {
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, va_f, CL_TYPE_CFUNC, clNil);
   return cf->func_ptr(x);
 }
-
-// iterate?
 
 /*
  * Array
@@ -650,7 +663,7 @@ Id cl_ary_join(Id va_ary, Id va_js) {
   for (i = ary->start; i < ary->size; i++) {
     Id va_s = ary->va_entries[i];
     CL_ACQUIRE_STR_D(ds, va_s, clNil);
-    CL_CHECK_ERROR((ts + ds.l + djs.l >= CL_CELL_SIZE),"join: Array too large",clNil);
+    CL_CHECK_ERROR((ts + ds.l + djs.l >= CL_CELL_SIZE),"join: array too large",clNil);
     memcpy(rs + ts, ds.s, ds.l);
     ts += ds.l;
     memcpy(rs + ts, djs.s, djs.l);
@@ -706,10 +719,17 @@ Id cl_ary_iterate(Id va_ary, int *i) {
   return cl_ary_index(va_ary, (*i)++); 
 }
 
-int cl_ary_is_type_i(Id a, int t) {
+int cl_ary_contains_only_type_i(Id a, int t) {
   int i = 0; Id va;
   while ((va = cl_ary_iterate(a, &i)).s)
       if (!cl_is_type_i(va, t))  return 0;
+  return 1;
+}
+
+int cl_ary_contains_only_primitives_i(Id a) {
+  int i = 0; Id va;
+  while ((va = cl_ary_iterate(a, &i)).s)
+      if (CL_TYPE(va) > CL_TYPE_INT)  return 0;
   return 1;
 }
 
@@ -743,18 +763,20 @@ Id cl_string_split(Id va_s) {
 
 Id cl_input(char *prompt) {
   if (cl_interactive) printf("%s", prompt); 
-  size_t l;
+  size_t l; 
   char *p = fgetln(fin, &l);
+  if (l > 0 && p[0] == ';') return clNil;
   if (l > 0 && p[l - 1] == '\n') --l;
   Id s = cl_string_new(p, l);
   return s;
 }
 
 /*
- * Parsing
+ * Scheme parsing code.
  */
 
 Id cl_tokenize(Id va_s) {
+  if (!va_s.s) return clNil;
   return cl_string_split(
       cl_string_replace(cl_string_replace(va_s, S("("), S(" ( ")),
       S(")"), S(" ) ")));
@@ -805,7 +827,7 @@ Id cl_eval(Id x, Id env) {
     return ca_s(x);
   } else if (cl_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
-    return cl_eval(test, env).s ? cl_eval(conseq, env) : cl_eval(alt, env);
+    return cnil2(cl_eval(test, env)).s ? cl_eval(conseq, env) : cl_eval(alt, env);
   } else if (cl_string_equals_cp_i(x0, "set!")) { // (set! var exp)
     var = ca_s(x), exp = ca_th(x);
     cl_env_find_and_set(env, var, cl_eval(exp, env));
@@ -814,6 +836,7 @@ Id cl_eval(Id x, Id env) {
     cl_ht_set(env, var, cl_eval(exp, env));
   } else if (cl_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
     Id l = cl_ary_new(); cl_ary_push(l, ca_s(x)); cl_ary_push(l, ca_th(x));
+    cl_ary_push(l, env);
     return l; 
   } else if (cl_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
     int i = 1;
@@ -824,15 +847,18 @@ Id cl_eval(Id x, Id env) {
     int i = 1;
     while ((v = cl_ary_iterate(x, &i)).s) cl_ary_push(vars, cl_eval(v, env));
     Id lambda = cl_env_find(env, x0);
+    if (!lambda.s) { return cl_handle_error_with_err_string(__FUNCTION__, 
+            "Unknown proc", cl_string_ptr(x0)); }
     if (cl_is_type_i(lambda, CL_TYPE_CFUNC)) return cl_call(lambda, vars);
     Id vdecl = cl_ary_index(lambda, 0);
     if (cl_ary_len(vdecl) != cl_ary_len(vars)) 
         return cl_handle_error_with_err_string(__FUNCTION__, 
             "parameter count mismatch!", cl_string_ptr(x0));
-    Id e = cl_env_new(env), p;
+    Id e = cl_env_new(cl_ary_index(lambda, 2)), p;
     i = 0;
-    while ((p = cl_ary_iterate(vdecl, &i)).s) 
-        cl_ht_set(e, p, cl_eval(cl_ary_index(vars, i - 1), env));
+    while ((p = cl_ary_iterate(vdecl, &i)).s)  {
+        cl_ht_set(e, p, cl_ary_index(vars, i - 1));
+    }
     return cl_eval(cl_ary_index(lambda, 1), e);
   }
   return clNil;
@@ -848,11 +874,25 @@ Id  __try_convert_to_floats(Id x) {
   }
   return a;
 }
+
+Id  __try_convert_to_ints(Id x) {
+  Id a = cl_ary_new(), n0, n;
+  int i = 0; 
+  while ((n0 = cl_ary_iterate(x, &i)).s) {
+    n = cn(n0);
+    if (!cl_is_number(n)) return clNil;
+    cl_ary_push(a, n);
+  }
+  return a;
+}
 // STD func
 
 #define ON_I \
-  int t = (cl_ary_is_type_i(x, CL_TYPE_INT) ? 1 : \
-      (cl_ary_is_type_i(x, CL_TYPE_FLOAT) ? 2 : 0)); \
+  int t = (cl_ary_contains_only_type_i(x, CL_TYPE_INT) ? 1 : \
+      (cl_ary_contains_only_type_i(x, CL_TYPE_FLOAT) ? 2 : 0)); \
+  if (t == 0) { \
+      Id try = __try_convert_to_ints(x);  \
+      if (try.s) { t = 1; x = try; }} \
   if (t == 0) { \
       Id try = __try_convert_to_floats(x);  \
       if (try.s) { t = 2; x = try; }} \
@@ -901,7 +941,7 @@ void cl_add_globals(Id env) {
 }
 
 Id cl_to_string(Id exp) {
-  if (!exp.s) return S("null");
+  if (CL_TYPE(exp) == CL_TYPE_BOOL) { return S(exp.s ? "true" : "null"); }
   if (cl_is_number(exp)) return cl_string_new_number(exp);
   if (CL_TYPE(exp) == CL_TYPE_CFUNC) return S("CFUNC");
   if (CL_TYPE(exp) != CL_TYPE_ARRAY) return exp;
@@ -930,8 +970,7 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-Id cl_debug() {
-}
+Id cl_debug() { }
 
 // DEBUG
 Id __ds(const char *comment, Id va) {
