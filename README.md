@@ -34,30 +34,31 @@ USING
 =====
 
 clispy % ./compile.sh && clispy -v ./tests/fact.scm
-| #! /bin/sh -v
-| gcc -o clispy clispy.c
-| #! ./clispy
-| (define area (lambda (r) (* 3.141592653 (* r r))))
-| (begin (display (area 3.0)) (newline))
-| 28.274334
-| (define fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
-| (begin (display (fact 15)) (newline))
-| 2004310016
-| (define first car)
-| (define rest cdr)
-| (define count (lambda (item L) (if L (+ (equal? item (first L)) (count
-| item (rest L))) 0)))
-| (begin (display (count 0 (list 0 1 2 3 0 0))) (newline))
-| 3
-| (begin (display (count (quote the) (quote (the more the merrier the
-| bigger the better)))) (newline))
-| 4
-| (define make-account (lambda (balance) (lambda (amt)  (begin (display
-| balance) (newline) (set!  balance (+ balance amt)) balance))))
-| (define a1 (make-account 100.00))
-| (begin (display (a1 -20.00)) (newline))
-| 100.000000
-| 80.000000
+
+    #! /bin/sh -v
+    gcc -o clispy clispy.c
+    #! ./clispy
+    (define area (lambda (r) (* 3.141592653 (* r r))))
+    (begin (display (area 3.0)) (newline))
+    28.274334
+    (define fact (lambda (n) (if (<= n 1) 1 (* n (fact (- n 1))))))
+    (begin (display (fact 15)) (newline))
+    2004310016
+    (define first car)
+    (define rest cdr)
+    (define count (lambda (item L) (if L (+ (equal? item (first L)) (count
+    item (rest L))) 0)))
+    (begin (display (count 0 (list 0 1 2 3 0 0))) (newline))
+    3
+    (begin (display (count (quote the) (quote (the more the merrier the
+    bigger the better)))) (newline))
+    4
+    (define make-account (lambda (balance) (lambda (amt)  (begin (display
+    balance) (newline) (set!  balance (+ balance amt)) balance))))
+    (define a1 (make-account 100.00))
+    (begin (display (a1 -20.00)) (newline))
+    100.000000
+    80.000000
 
 
 LIMITATIONS
@@ -68,5 +69,5 @@ LIMITATIONS
 * The number of available variables is limited by 
    (CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) (default: 60G)
 * There are probably plenty of bugs in the interpreter since I haven't
-worked much yet with lisp-based languages, and have been more interested
-in the principle architecture of clispy than in the parser.
+worked much yet with lisp-based languages, and also I have been more
+interested in designing the architecture of clispy than in using it.
