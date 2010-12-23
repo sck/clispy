@@ -70,4 +70,4 @@ LIMITATIONS
    (CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) (default: 60G)
 * There are probably plenty of bugs in the interpreter since I haven't
 worked much yet with lisp-based languages, and also I have been more
-interested in designing the architecture of clispy than in using it.
+interested in designing the architecture of clispy rather than in using it.
