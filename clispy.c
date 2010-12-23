@@ -86,7 +86,7 @@ Id cl_handle_error_with_err_string_nh(const char *ctx,
  * Memory primitives 
  */
 
-#define CL_MEM_SIZE (size_t)(60LL * 1024 * 1024 * 1024)
+#define CL_MEM_SIZE (size_t)(70LL * 1024 * 1024 * 1024)
 
 void *cl_shm_create() {
   void *base = 0;
@@ -102,7 +102,7 @@ void *cl_shm_create() {
 
 #define CL_STATIC_ALLOC_SIZE 65535
 // for garbage collection
-#define RCS sizeof(int)
+#define RCS (sizeof(int)+sizeof(short int))
 #define rc_t int
 #define CL_CELL_SIZE (CL_STATIC_ALLOC_SIZE - RCS)
 
@@ -117,16 +117,14 @@ void *cl_shm_create() {
 #define cl_string_size_t short int
 
 typedef struct {
-  Id va_hash_dummy; 
-  cl_string_size_t dummy0;
+  int rc_dummy;  
   Id first_free;
-  Id dummy2;  // dummy for next
   size_t heap_size;
   size_t total_size;
 } cl_mem_descriptor_t;
 
 typedef struct {
-  Id va_hash_dummy; 
+  int rc_dummy; 
   Id next;
   size_t size;
 } cl_mem_chunk_descriptor_t;
@@ -136,19 +134,28 @@ Id cl_header_size_ssa() { Id a; CL_ADR(a) = 1; return a; }
 cl_mem_descriptor_t *cl_md;
 void *cl_base;
 
-#define VA_TO_PTR(va) \
-  ((va).s ? cl_base + RCS + ((size_t)CL_ADR(va) * CL_STATIC_ALLOC_SIZE) : 0)
+
+#define VA_TO_PTR0(va) \
+  ((va).s ? cl_base + RCS + ((size_t)CL_ADR(va) * CL_STATIC_ALLOC_SIZE) : 0) 
 #define PTR_TO_VA(va, p) \
   CL_ADR(va) = (int)(((p) - RCS - (char *)cl_base) / CL_STATIC_ALLOC_SIZE);
 
 #define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __FUNCTION__, __LINE__); return (r); }
 #define VA_0_R(va, r) if (!(va).s) { return (r); }
+#define VA_TO_PTR(va) (__ca(va, __FUNCTION__, __LINE__) ? VA_TO_PTR0(va) : 0 )
+
+int __ca(Id va, const char *where, int line) {
+  char *p0 = VA_TO_PTR0(va); P_0_R(p0, 1); 
+  rc_t *rc = (rc_t *)(p0 - RCS);
+  if ((*rc) == 0) { printf("[%s:%d] error: VA is not allocated!\n", where, line); abort(); }
+  //if ((*rc) == 1) { printf("[%s:%d] Warning: RC is 0\n", where, line); abort(); }
+  return 1;
+}
 
 int cnil(Id i) { return i.s == clNil.s; }
 Id cb(int i) { return i ? clTrue : clNil; }
 
-
-cl_mem_chunk_descriptor_t *cl_md_first_free() { return VA_TO_PTR(cl_md->first_free); }
+cl_mem_chunk_descriptor_t *cl_md_first_free() {return VA_TO_PTR0(cl_md->first_free);}
 
 int cl_var_free() {
     return (cl_md->total_size - cl_md->heap_size) / CL_STATIC_ALLOC_SIZE; }
@@ -181,12 +188,19 @@ Id cl_valloc(const char *where, short int type) {
     PTR_TO_VA(r, (char *)c + c->size);
   }
   if (!c->next.s) { cl_md->heap_size += CL_STATIC_ALLOC_SIZE; }
-  if (r.s) { CL_TYPE(r) = type; }
+  if (r.s) { 
+    CL_TYPE(r) = type; 
+    char *p = VA_TO_PTR0(r);
+    rc_t *rc = (rc_t *) (p - RCS);
+    *rc = 0x1;
+    short int *t = (short int *)(p - sizeof(short int));
+    *t = type;
+  }
   return r; 
 }
 
 int cl_zero(Id va) { 
-    char *p = VA_TO_PTR(va); P_0_R(p, 0); memset(p, 0, CL_CELL_SIZE); return 0;}
+    char *p = VA_TO_PTR0(va); P_0_R(p, 0); memset(p, 0, CL_CELL_SIZE); return 0;}
 
 #define CL_ALLOC(va, type) va = cl_valloc(__FUNCTION__, type); VA_0_R(va, clNil);
 
@@ -198,6 +212,7 @@ int cl_free(Id va) {
       (cl_mem_chunk_descriptor_t *)used_chunk_p;
   mcd_used_chunk->next = cl_md->first_free;
   mcd_used_chunk->size = CL_STATIC_ALLOC_SIZE;
+  mcd_used_chunk->rc_dummy = 0;
   cl_md->first_free = va;
   return 1;
 }
@@ -261,31 +276,64 @@ int cl_is_type_i(Id va, int t) { return c_type(CL_TYPE(va)) == c_type(t); }
 #define CL_CHECK_ERROR(cond,msg,r) \
   if ((cond)) { cl_handle_error_with_err_string_nh(__FUNCTION__, (msg)); return (r); }
 
-#define CL_TYPED_VA_TO_PTR(ptr, va, type, r) \
-  CL_CHECK_TYPE((va), (type), (r)); \
-  (ptr) = VA_TO_PTR((va)); P_0_R((ptr), (r));
+#define __CL_TYPED_VA_TO_PTR(ptr, va, type, r, check) \
+  CL_CHECK_TYPE((va), (type), (r)); (ptr) = check((va)); P_0_R((ptr), (r));
+#define CL_TYPED_VA_TO_PTR(p,v,t,r) __CL_TYPED_VA_TO_PTR(p,v,t,r,VA_TO_PTR)
+#define CL_TYPED_VA_TO_PTR0(p,v,t,r) __CL_TYPED_VA_TO_PTR(p,v,t,r,VA_TO_PTR0)
 
 /*
  * Reference counting.
  */
 
-#define RCI if (!va.s || va.t.type < 3) { return va; }; char *p0 = VA_TO_PTR(va); \
+#define RCI if (!va.s || va.t.type < 3) { return va; }; char *p0 = VA_TO_PTR0(va); \
   P_0_R(p0, clNil); rc_t *rc = (rc_t *)(p0 - RCS);
 
 int cl_ary_free(Id);
 int cl_ht_free(Id);
 
 Id cl_release(Id va) { 
-  RCI; CL_CHECK_ERROR((*rc <= 0), "Reference counter is already 0!", clNil);
-  if (--(*rc) == 0) {
-    switch (CL_TYPE(va)) {
-      case CL_TYPE_ARRAY: cl_ary_free(va); break;
-      case CL_TYPE_HASH: cl_ht_free(va); break;
-      case CL_TYPE_HASH_PAIR: /* ignore: will always be freed by hash */; break;
-      default: cl_free(va); break;
+  RCI; CL_CHECK_ERROR((*rc <= 1), "Reference counter is already 0!", clNil);
+  --(*rc);
+  return va;
+}
+
+Id cl_delete(Id va) { 
+  RCI; 
+  if ((*rc) == 0x0) return clNil; // ignore, so one can jump at random address!
+  CL_CHECK_ERROR((*rc != 1), "Cannot delete, rc != 0!", clNil);
+  switch (CL_TYPE(va)) {
+    case CL_TYPE_ARRAY: cl_ary_free(va); break;
+    case CL_TYPE_HASH: cl_ht_free(va); break;
+    case CL_TYPE_HASH_PAIR: /* ignore: will always be freed by hash */; break;
+    default: cl_free(va); break;
+  }
+  (*rc) = 0x0;
+  return clTrue;
+}
+
+void cl_gc_collect() {
+  size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
+  size_t mem_start = cl_md->total_size + cl_header_size() - cl_md->heap_size;
+  char *p = mem_start + cl_base;
+  size_t i;
+  size_t deleted = 0;
+  for (i = 0; i < entries; ++i, p += CL_STATIC_ALLOC_SIZE) {
+    rc_t *rc = (rc_t *)p;
+    short int *t = (short int *) (p + sizeof(int));
+    if (*rc == 1) {
+      Id va;
+      PTR_TO_VA(va, p + RCS);
+      CL_TYPE(va) = *t;
+      //char *c = p;
+      //int j;
+      //printf("deleting: %s: ", cl_type_to_cp(*t));
+      //for (j = 0; j < 20; j++, c++) { printf("%c", *c); }
+      //printf("\n");
+      deleted++;
+      cl_delete(va);
     }
   }
-  return clTrue;
+  //printf("collect: %zd potential entries, %zd deleted\n", entries, deleted);
 }
 
 Id cl_retain(Id va) { RCI; (*rc)++; return va; }
@@ -298,7 +346,7 @@ Id cl_retain(Id va) { RCI; (*rc)++; return va; }
 #define CL_STR_MAX_LEN (CL_CELL_SIZE - sizeof(cl_string_size_t))
 
 int cl_strdup(Id va_dest, char *source, cl_string_size_t l) {
-  char *p; CL_TYPED_VA_TO_PTR(p, va_dest, CL_TYPE_STRING, 0);
+  char *p; CL_TYPED_VA_TO_PTR0(p, va_dest, CL_TYPE_STRING, 0);
   CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "strdup: string too large", 0);
   *(cl_string_size_t *) p = l;
   p += sizeof(cl_string_size_t);
@@ -519,7 +567,7 @@ Id cl_ht_set(Id va_ht, Id va_key, Id va_value) {
   if (new_entry) { 
     v = cl_ht_hash(va_key);
     CL_ALLOC(va_hr, CL_TYPE_HASH_PAIR);
-    hr = VA_TO_PTR(cl_retain(va_hr)); P_0_R(hr, clNil);
+    cl_retain(va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
     hr->va_key = cl_retain(va_key);
     ht->size += 1;
   } 
@@ -577,12 +625,12 @@ void cl_init() {
   clTrue.t.d.i = 1;
   cl_base = cl_shm_create();
   cl_init_memory(cl_base);
-  cl_symbols = cl_ht_new();
-  cl_global_env = cl_ht_new();
+  cl_debug();
+  cl_symbols = cl_retain(cl_ht_new());
+  cl_global_env = cl_retain(cl_ht_new());
   cl_add_globals(cl_global_env);
   if (cl_interactive) 
       printf("clispy %s started; %d vars available\n", CL_VERSION, cl_var_free());
-  cl_debug();
 }
 
 /*
@@ -593,7 +641,7 @@ typedef struct { Id (*func_ptr)(Id); } cl_cfunc_t;
 
 Id cl_define_func(char *name, Id (*p)(Id), Id env) { 
   Id va_f; CL_ALLOC(va_f, CL_TYPE_CFUNC);
-  cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, va_f, CL_TYPE_CFUNC, clNil);
+  cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR0(cf, va_f, CL_TYPE_CFUNC, clNil);
   cf->func_ptr = p;
   cl_ht_set(env, cl_intern(S(name)), va_f);
   return clTrue;
@@ -693,7 +741,7 @@ Id cl_ary_unshift(Id va_ary) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (ary->size - ary->start <= 0) { return clNil; } 
   ary->start++;
-  return ary->va_entries[ary->start - 1];
+  return cl_release(ary->va_entries[ary->start - 1]);
 }
 
 int cl_ary_len(Id va_ary) {
@@ -955,6 +1003,7 @@ void cl_repl() {
     Id val = cl_eval(cl_parse(cl_input("clispy> ")), cl_global_env);
     if (feof(fin)) return;
     if (cl_interactive) printf("-> %s\n", cl_string_ptr(cl_to_string(val)));
+    cl_gc_collect();
   }
 }
 
@@ -970,7 +1019,8 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-Id cl_debug() { }
+Id cl_debug() { 
+}
 
 // DEBUG
 Id __ds(const char *comment, Id va) {
