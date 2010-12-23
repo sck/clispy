@@ -796,7 +796,7 @@ Id cl_input(char *prompt) {
 }
 
 /*
- * Scheme parsing code, port of Norvig's clis.py:
+ * Scheme parsing code, port of Norvig's lis.py:
  * <http://norvig.com/lispy.html>
  */
 
