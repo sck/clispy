@@ -39,12 +39,6 @@ typedef union {
 static Id clNil = {0}; 
 static Id clTrue = {0};
 
-Id __d(const char *where, int l, const char *comment, Id va);
-Id __ds(const char *comment, Id va);
-char *cl_string_ptr(Id va_s);
-#define D(comment, va) __d(__FUNCTION__, __LINE__, comment, (va))
-#define DS(comment, va) cl_string_ptr(__ds(comment, (va)))
-
 /*
  * Basic error handling
  */
@@ -307,16 +301,14 @@ Id cl_delete(Id va) {
     case CL_TYPE_HASH_PAIR: /* ignore: will always be freed by hash */; break;
     default: cl_free(va); break;
   }
-  (*rc) = 0x0;
   return clTrue;
 }
 
-void cl_gc_collect() {
+void cl_garbage_collect() {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
   size_t mem_start = cl_md->total_size + cl_header_size() - cl_md->heap_size;
   char *p = mem_start + cl_base;
   size_t i;
-  size_t deleted = 0;
   for (i = 0; i < entries; ++i, p += CL_STATIC_ALLOC_SIZE) {
     rc_t *rc = (rc_t *)p;
     short int *t = (short int *) (p + sizeof(int));
@@ -324,20 +316,12 @@ void cl_gc_collect() {
       Id va;
       PTR_TO_VA(va, p + RCS);
       CL_TYPE(va) = *t;
-      //char *c = p;
-      //int j;
-      //printf("deleting: %s: ", cl_type_to_cp(*t));
-      //for (j = 0; j < 20; j++, c++) { printf("%c", *c); }
-      //printf("\n");
-      deleted++;
       cl_delete(va);
     }
   }
-  //printf("collect: %zd potential entries, %zd deleted\n", entries, deleted);
 }
 
 Id cl_retain(Id va) { RCI; (*rc)++; return va; }
-
 
 /*
  * String
@@ -618,14 +602,12 @@ Id cl_env_find_and_set(Id va_ht, Id va_key, Id va_value) {
 
 Id cl_global_env;
 
-Id cl_debug();
 void cl_add_globals(Id env);
 
 void cl_init() {
   clTrue.t.d.i = 1;
   cl_base = cl_shm_create();
   cl_init_memory(cl_base);
-  cl_debug();
   cl_symbols = cl_retain(cl_ht_new());
   cl_global_env = cl_retain(cl_ht_new());
   cl_add_globals(cl_global_env);
@@ -692,7 +674,6 @@ Id cl_ary_new_join(Id a, Id b) {
   Id n; CL_ALLOC(n, CL_TYPE_ARRAY);
   ht_array_t *an; CL_TYPED_VA_TO_PTR(an, n, CL_TYPE_ARRAY, clNil);
   int aas = aa->size - aa->start;
-  // XXX: overflow!
   an->size = aas + ab->size - ab->start;
   CL_CHECK_ERROR((an->size >= CL_ARY_MAX_ENTRIES), "array is full", clNil);
   memcpy(&an->va_entries, &aa->va_entries + aa->start, aas * sizeof(Id));
@@ -702,7 +683,7 @@ Id cl_ary_new_join(Id a, Id b) {
   return n;
 }
 
-Id cl_ary_join(Id va_ary, Id va_js) {
+Id cl_ary_join_by_s(Id va_ary, Id va_js) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   CL_ACQUIRE_STR_D(djs, va_js, clNil);
   char rs[CL_CELL_SIZE];
@@ -771,13 +752,6 @@ int cl_ary_contains_only_type_i(Id a, int t) {
   int i = 0; Id va;
   while ((va = cl_ary_iterate(a, &i)).s)
       if (!cl_is_type_i(va, t))  return 0;
-  return 1;
-}
-
-int cl_ary_contains_only_primitives_i(Id a) {
-  int i = 0; Id va;
-  while ((va = cl_ary_iterate(a, &i)).s)
-      if (CL_TYPE(va) > CL_TYPE_INT)  return 0;
   return 1;
 }
 
@@ -971,7 +945,7 @@ Id cl_list(Id x) { return x; }
 Id cl_is_list(Id x) { return cb(cl_is_type_i(x, CL_TYPE_ARRAY)); }
 Id cl_is_null(Id x) { return cb(cnil(x)); }
 Id cl_is_symbol(Id x) { return cb(cl_is_type_i(x, CL_TYPE_SYMBOL)); }
-Id cl_display(Id x) { printf("%s", cl_string_ptr(cl_ary_join(
+Id cl_display(Id x) { printf("%s", cl_string_ptr(cl_ary_join_by_s(
     cl_ary_map(x, cl_to_string), S(" ")))); return clNil;}
 Id cl_newline(Id x) { printf("\n"); return clNil;}
 
@@ -994,7 +968,7 @@ Id cl_to_string(Id exp) {
   if (CL_TYPE(exp) == CL_TYPE_CFUNC) return S("CFUNC");
   if (CL_TYPE(exp) != CL_TYPE_ARRAY) return exp;
   Id s = S("(");
-  cl_string_append(s, cl_ary_join(cl_ary_map(exp, cl_to_string), S(" ")));
+  cl_string_append(s, cl_ary_join_by_s(cl_ary_map(exp, cl_to_string), S(" ")));
   return cl_string_append(s, S(")"));
 }
 
@@ -1003,7 +977,7 @@ void cl_repl() {
     Id val = cl_eval(cl_parse(cl_input("clispy> ")), cl_global_env);
     if (feof(fin)) return;
     if (cl_interactive) printf("-> %s\n", cl_string_ptr(cl_to_string(val)));
-    cl_gc_collect();
+    cl_garbage_collect();
   }
 }
 
@@ -1018,25 +992,4 @@ int main(int argc, char **argv) {
   cl_repl();
   return 0;
 }
-
-Id cl_debug() { 
-}
-
-// DEBUG
-Id __ds(const char *comment, Id va) {
-  char b[CL_CELL_SIZE * 2];
-  snprintf(b, 1023, "%s%s%s", comment, strlen(comment) > 0 ? " " : "", 
-      cl_type_to_i_cp(CL_TYPE(va)));
-  if (!cl_is_string(va) && CL_TYPE(va) != CL_TYPE_ARRAY)  {
-    snprintf(b + strlen(b), 1023, "%s:", cl_type_to_cp(CL_TYPE(va)));
-    if (!cl_is_number(va)) snprintf(b + strlen(b), 1023, "<0x%X> ", CL_ADR(va));
-  }
-  Id s = cl_to_string(va);
-  snprintf(b + strlen(b), CL_CELL_SIZE, "%s%s", cl_string_ptr(s), 
-      CL_TYPE(va) == CL_TYPE_STRING ? "'" : "");
-  return S(b);
-}
-
-Id __d(const char *where, int l, const char *comment, Id va) {
-    printf("[%s:%d] %s\n", where, l, cl_string_ptr(__ds(comment, va))); return va; }
 
