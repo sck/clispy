@@ -301,6 +301,7 @@ Id cl_delete(Id va) {
     case CL_TYPE_HASH_PAIR: /* ignore: will always be freed by hash */; break;
     default: cl_free(va); break;
   }
+  (*rc) = 0x0;
   return clTrue;
 }
 
@@ -322,6 +323,7 @@ void cl_garbage_collect() {
 }
 
 Id cl_retain(Id va) { RCI; (*rc)++; return va; }
+
 
 /*
  * String
