@@ -49,7 +49,7 @@ typedef struct {
 } cl_error_t;
 
 cl_error_t cl_error;
-int cl_interactive = 1;
+int cl_interactive = 1, cl_verbose = 1;
 FILE *fin;
 
 void cl_reset_errors() { memset(&cl_error, 0, sizeof(cl_error)); }
@@ -323,7 +323,6 @@ void cl_garbage_collect() {
 }
 
 Id cl_retain(Id va) { RCI; (*rc)++; return va; }
-
 
 /*
  * String
@@ -792,11 +791,13 @@ Id cl_input(char *prompt) {
   if (l > 0 && p[0] == ';') return clNil;
   if (l > 0 && p[l - 1] == '\n') --l;
   Id s = cl_string_new(p, l);
+  if (cl_verbose) printf("%s\n", cl_string_ptr(s));
   return s;
 }
 
 /*
- * Scheme parsing code.
+ * Scheme parsing code, port of Norvig's clis.py:
+ * <http://norvig.com/lispy.html>
  */
 
 Id cl_tokenize(Id va_s) {
@@ -909,7 +910,6 @@ Id  __try_convert_to_ints(Id x) {
   }
   return a;
 }
-// STD func
 
 #define ON_I \
   int t = (cl_ary_contains_only_type_i(x, CL_TYPE_INT) ? 1 : \
@@ -985,10 +985,11 @@ void cl_repl() {
 
 int main(int argc, char **argv) {
   cl_interactive = isatty(0);
-  if (argc == 2) { 
-    if ((fin = fopen(argv[1], "r")) == NULL) {
-        perror(argv[1]); exit(1); }
+  if (argc > 1) { 
+    if ((fin = fopen(argv[argc - 1], "r")) == NULL) {
+        perror(argv[argc - 1]); exit(1); }
     cl_interactive = 0;
+    cl_verbose = argc > 2;
   } else { fin = stdin; }
   cl_init();
   cl_repl();
